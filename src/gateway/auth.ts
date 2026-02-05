@@ -189,7 +189,13 @@ export function resolveGatewayAuth(params: {
   };
 }
 
-export function assertGatewayAuthConfigured(auth: ResolvedGatewayAuth): void {
+export function assertGatewayAuthConfigured(
+  auth: ResolvedGatewayAuth,
+  options?: { multiTenantEnabled?: boolean },
+): void {
+  // In multi-tenant SaaS mode, token is obtained after user login, not required at startup
+  if (options?.multiTenantEnabled) return;
+
   if (auth.mode === "token" && !auth.token) {
     if (auth.allowTailscale) return;
     throw new Error(

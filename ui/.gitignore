@@ -1,0 +1,8 @@
+# Environment files (contain sensitive config)
+.env
+.env.local
+.env.development
+.env.production
+
+# Keep example as template
+!.env.example

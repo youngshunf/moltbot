@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
 
 import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../../agents/pi-embedded.js";
 import { stopSubagentsForRequester } from "../../auto-reply/reply/abort.js";
@@ -41,7 +42,7 @@ import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const sessionsHandlers: GatewayRequestHandlers = {
-  "sessions.list": ({ params, respond }) => {
+  "sessions.list": ({ params, respond, client }) => {
     if (!validateSessionsListParams(params)) {
       respond(
         false,
@@ -55,7 +56,18 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
     const p = params as import("../protocol/index.js").SessionsListParams;
     const cfg = loadConfig();
-    const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
+    let storePath: string;
+    let store: Record<string, SessionEntry>;
+
+    // Multi-tenant: store sessions in user's workspace directory, not agent directory
+    if (client?.multiTenantWorkspaceDir) {
+      storePath = path.join(client.multiTenantWorkspaceDir, "sessions", "sessions.json");
+      store = loadSessionStore(storePath);
+    } else {
+      const combined = loadCombinedSessionStoreForGateway(cfg);
+      storePath = combined.storePath;
+      store = combined.store;
+    }
     const result = listSessionsFromStore({
       cfg,
       storePath,
@@ -64,7 +76,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     });
     respond(true, result, undefined);
   },
-  "sessions.preview": ({ params, respond }) => {
+  "sessions.preview": ({ params, respond, client }) => {
     if (!validateSessionsPreviewParams(params)) {
       respond(
         false,
@@ -100,9 +112,19 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const storeCache = new Map<string, Record<string, SessionEntry>>();
     const previews: SessionsPreviewEntry[] = [];
 
+    let storePathOverride: string | undefined;
+    // Multi-tenant: store sessions in user's workspace directory, not agent directory
+    if (client?.multiTenantWorkspaceDir) {
+      storePathOverride = path.join(client.multiTenantWorkspaceDir, "sessions", "sessions.json");
+    }
+
     for (const key of keys) {
       try {
-        const target = resolveGatewaySessionStoreTarget({ cfg, key });
+        const target = resolveGatewaySessionStoreTarget({
+          cfg,
+          key,
+          overrides: { storePath: storePathOverride },
+        });
         const store = storeCache.get(target.storePath) ?? loadSessionStore(target.storePath);
         storeCache.set(target.storePath, store);
         const entry =
@@ -154,7 +176,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
     respond(true, { ok: true, key: resolved.key }, undefined);
   },
-  "sessions.patch": async ({ params, respond, context }) => {
+  "sessions.patch": async ({ params, respond, context, client }) => {
     if (!validateSessionsPatchParams(params)) {
       respond(
         false,
@@ -174,7 +196,16 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     const cfg = loadConfig();
-    const target = resolveGatewaySessionStoreTarget({ cfg, key });
+    let storePathOverride: string | undefined;
+    // Multi-tenant: store sessions in user's workspace directory, not agent directory
+    if (client?.multiTenantWorkspaceDir) {
+      storePathOverride = path.join(client.multiTenantWorkspaceDir, "sessions", "sessions.json");
+    }
+    const target = resolveGatewaySessionStoreTarget({
+      cfg,
+      key,
+      overrides: { storePath: storePathOverride },
+    });
     const storePath = target.storePath;
     const applied = await updateSessionStore(storePath, async (store) => {
       const primaryKey = target.storeKeys[0] ?? key;
@@ -203,7 +234,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     };
     respond(true, result, undefined);
   },
-  "sessions.reset": async ({ params, respond }) => {
+  "sessions.reset": async ({ params, respond, client }) => {
     if (!validateSessionsResetParams(params)) {
       respond(
         false,
@@ -223,7 +254,16 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     const cfg = loadConfig();
-    const target = resolveGatewaySessionStoreTarget({ cfg, key });
+    let storePathOverride: string | undefined;
+    // Multi-tenant: store sessions in user's workspace directory, not agent directory
+    if (client?.multiTenantWorkspaceDir) {
+      storePathOverride = path.join(client.multiTenantWorkspaceDir, "sessions", "sessions.json");
+    }
+    const target = resolveGatewaySessionStoreTarget({
+      cfg,
+      key,
+      overrides: { storePath: storePathOverride },
+    });
     const storePath = target.storePath;
     const next = await updateSessionStore(storePath, (store) => {
       const primaryKey = target.storeKeys[0] ?? key;
@@ -261,7 +301,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     });
     respond(true, { ok: true, key: target.canonicalKey, entry: next }, undefined);
   },
-  "sessions.delete": async ({ params, respond }) => {
+  "sessions.delete": async ({ params, respond, client }) => {
     if (!validateSessionsDeleteParams(params)) {
       respond(
         false,
@@ -282,7 +322,16 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
     const cfg = loadConfig();
     const mainKey = resolveMainSessionKey(cfg);
-    const target = resolveGatewaySessionStoreTarget({ cfg, key });
+    let storePathOverride: string | undefined;
+    // Multi-tenant: store sessions in user's workspace directory, not agent directory
+    if (client?.multiTenantWorkspaceDir) {
+      storePathOverride = path.join(client.multiTenantWorkspaceDir, "sessions", "sessions.json");
+    }
+    const target = resolveGatewaySessionStoreTarget({
+      cfg,
+      key,
+      overrides: { storePath: storePathOverride },
+    });
     if (target.canonicalKey === mainKey) {
       respond(
         false,
@@ -347,7 +396,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
     respond(true, { ok: true, key: target.canonicalKey, deleted: existed, archived }, undefined);
   },
-  "sessions.compact": async ({ params, respond }) => {
+  "sessions.compact": async ({ params, respond, client }) => {
     if (!validateSessionsCompactParams(params)) {
       respond(
         false,
@@ -372,7 +421,16 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         : 400;
 
     const cfg = loadConfig();
-    const target = resolveGatewaySessionStoreTarget({ cfg, key });
+    let storePathOverride: string | undefined;
+    // Multi-tenant: store sessions in user's workspace directory, not agent directory
+    if (client?.multiTenantWorkspaceDir) {
+      storePathOverride = path.join(client.multiTenantWorkspaceDir, "sessions", "sessions.json");
+    }
+    const target = resolveGatewaySessionStoreTarget({
+      cfg,
+      key,
+      overrides: { storePath: storePathOverride },
+    });
     const storePath = target.storePath;
     // Lock + read in a short critical section; transcript work happens outside.
     const compactTarget = await updateSessionStore(storePath, (store) => {

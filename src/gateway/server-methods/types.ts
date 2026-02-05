@@ -14,6 +14,10 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 export type GatewayClient = {
   connect: ConnectParams;
+  /** Multi-tenant user agent directory path (for auth-profiles.json etc.) */
+  multiTenantAgentDir?: string;
+  /** Multi-tenant user workspace directory path (for file I/O) */
+  multiTenantWorkspaceDir?: string;
 };
 
 export type RespondFn = (

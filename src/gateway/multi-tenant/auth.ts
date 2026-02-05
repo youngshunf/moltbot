@@ -57,7 +57,7 @@ export async function authorizeGatewayConnectMultiTenant(params: {
 
   // Multi-tenant authentication path
   if (multiTenantManager && connectAuth?.gatewayToken) {
-    const userId = multiTenantManager.authenticateToken(connectAuth.gatewayToken);
+    const userId = await multiTenantManager.authenticateToken(connectAuth.gatewayToken);
 
     if (userId) {
       return {

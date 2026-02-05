@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { resolveUserPath } from "../../utils.js";
@@ -99,11 +100,26 @@ export async function runEmbeddedPiAgent(
         (params.config?.agents?.defaults?.model?.fallbacks?.length ?? 0) > 0;
       await ensureOpenClawModelsJson(params.config, agentDir);
 
+      let baseUrlOverride: string | undefined;
+      try {
+        const modelsJsonPath = path.join(agentDir, "models.json");
+        const rawInfo = await fs.readFile(modelsJsonPath, "utf8");
+        const info = JSON.parse(rawInfo);
+        const normalized = normalizeProviderId(provider);
+        baseUrlOverride = info?.providers?.[normalized]?.baseUrl;
+        if (baseUrlOverride) {
+          log.info(`Using models.json baseUrl override for ${provider}: ${baseUrlOverride}`);
+        }
+      } catch (err) {
+        // ignore missing models.json or parse error
+      }
+
       const { model, error, authStorage, modelRegistry } = resolveModel(
         provider,
         modelId,
         agentDir,
         params.config,
+        baseUrlOverride,
       );
       if (!model) {
         throw new Error(error ?? `Unknown model: ${provider}/${modelId}`);

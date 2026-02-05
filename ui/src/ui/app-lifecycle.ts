@@ -50,7 +50,7 @@ export function handleConnected(host: LifecycleHost) {
   );
   window.addEventListener("popstate", host.popStateHandler);
   connectGateway(host as unknown as Parameters<typeof connectGateway>[0]);
-  startNodesPolling(host as unknown as Parameters<typeof startNodesPolling>[0]);
+  startNodesPolling
   if (host.tab === "logs") {
     startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);
   }

@@ -69,9 +69,21 @@ function drainLane(lane: string) {
         } catch (err) {
           state.active -= 1;
           const isProbeLane = lane.startsWith("auth-probe:") || lane.startsWith("session:probe-");
-          if (!isProbeLane) {
+          const errorMessage = String(err);
+          // Suppress error logs for unconfigured default agent (common in multi-tenant setups)
+          const isMainAgentAuthError =
+            lane.includes(":agent:main:") &&
+            (errorMessage.includes("No API key found") ||
+              errorMessage.includes("Auth profile") ||
+              errorMessage.includes("not configured"));
+
+          if (!isProbeLane && !isMainAgentAuthError) {
             diag.error(
-              `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${String(err)}"`,
+              `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${errorMessage}"`,
+            );
+          } else if (isMainAgentAuthError) {
+            diag.warn(
+              `lane task warning: lane=${lane} durationMs=${Date.now() - startTime} error="${errorMessage}"`,
             );
           }
           pump();

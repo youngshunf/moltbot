@@ -50,6 +50,7 @@ export function resolveModel(
   modelId: string,
   agentDir?: string,
   cfg?: OpenClawConfig,
+  baseUrlOverride?: string,
 ): {
   model?: Model<Api>;
   error?: string;
@@ -59,7 +60,7 @@ export function resolveModel(
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
   const authStorage = discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
-  const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
+  let model = modelRegistry.find(provider, modelId) as Model<Api> | null;
   if (!model) {
     const providers = cfg?.models?.providers ?? {};
     const inlineModels = buildInlineProviderModels(providers);
@@ -69,6 +70,13 @@ export function resolveModel(
     );
     if (inlineMatch) {
       const normalized = normalizeModelCompat(inlineMatch as Model<Api>);
+      if (baseUrlOverride) {
+        return {
+          model: { ...normalized, baseUrl: baseUrlOverride },
+          authStorage,
+          modelRegistry,
+        };
+      }
       return {
         model: normalized,
         authStorage,
@@ -82,7 +90,7 @@ export function resolveModel(
         name: modelId,
         api: providerCfg?.api ?? "openai-responses",
         provider,
-        baseUrl: providerCfg?.baseUrl,
+        baseUrl: baseUrlOverride ?? providerCfg?.baseUrl,
         reasoning: false,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -96,6 +104,10 @@ export function resolveModel(
       authStorage,
       modelRegistry,
     };
+  }
+
+  if (baseUrlOverride) {
+    model = { ...model, baseUrl: baseUrlOverride };
   }
   return { model: normalizeModelCompat(model), authStorage, modelRegistry };
 }

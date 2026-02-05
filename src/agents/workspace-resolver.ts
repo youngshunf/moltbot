@@ -14,11 +14,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import {
-  getMultiTenantTemplatePath,
-  getUserMemoryPath,
-  getUserSessionsPath,
-} from "../config/multi-tenant.js";
+import { getMultiTenantTemplatePath } from "../config/multi-tenant.js";
 import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
@@ -165,8 +161,10 @@ export function createWorkspaceFileResolver(params: {
   //   sessions/        - Session files
 
   const customDir = path.join(workspacePath, "custom");
-  const memoryDir = getUserMemoryPath(userId);
-  const sessionsDir = getUserSessionsPath(userId);
+  // Use the passed workspacePath directly to ensure consistency
+  // (don't rely on global config functions which might return different paths)
+  const memoryDir = path.join(workspacePath, "memory");
+  const sessionsDir = path.join(workspacePath, "sessions");
 
   /**
    * Try to read a file, return null if it doesn't exist.

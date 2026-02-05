@@ -37,6 +37,8 @@ export function resolveSessionTranscriptPath(
   sessionId: string,
   agentId?: string,
   topicId?: string | number,
+  /** Override sessions directory for multi-tenant user workspaces */
+  sessionsDirOverride?: string,
 ): string {
   const safeTopicId =
     typeof topicId === "string"
@@ -46,7 +48,8 @@ export function resolveSessionTranscriptPath(
         : undefined;
   const fileName =
     safeTopicId !== undefined ? `${sessionId}-topic-${safeTopicId}.jsonl` : `${sessionId}.jsonl`;
-  return path.join(resolveAgentSessionsDir(agentId), fileName);
+  const sessionsDir = sessionsDirOverride ?? resolveAgentSessionsDir(agentId);
+  return path.join(sessionsDir, fileName);
 }
 
 export function resolveSessionFilePath(

@@ -528,6 +528,21 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    // Multi-tenant SaaS configuration
+    multiTenant: z
+      .object({
+        enabled: z.boolean().optional(),
+        cloudBackendUrl: z.string().optional(),
+        serviceToken: z.string().optional(),
+        configRoot: z.string().optional(),
+        workspaceRoot: z.string().optional(),
+        templatePath: z.string().optional(),
+        maxCachedUsers: z.number().int().positive().optional(),
+        userIdleTimeoutMs: z.number().int().positive().optional(),
+        syncIntervalMs: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((cfg, ctx) => {

@@ -57,6 +57,8 @@ export const ConnectParamsSchema = Type.Object(
         {
           token: Type.Optional(Type.String()),
           password: Type.Optional(Type.String()),
+          /** Multi-tenant gateway token */
+          gatewayToken: Type.Optional(Type.String()),
         },
         { additionalProperties: false },
       ),
@@ -107,6 +109,16 @@ export const HelloOkSchema = Type.Object(
         tickIntervalMs: Type.Integer({ minimum: 1 }),
       },
       { additionalProperties: false },
+    ),
+    // Multi-tenant SaaS mode indicator
+    multiTenant: Type.Optional(
+      Type.Object(
+        {
+          enabled: Type.Boolean(),
+          loginRequired: Type.Boolean(),
+        },
+        { additionalProperties: false },
+      ),
     ),
   },
   { additionalProperties: false },

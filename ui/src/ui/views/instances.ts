@@ -16,11 +16,11 @@ export function renderInstances(props: InstancesProps) {
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
-          <div class="card-title">Connected Instances</div>
-          <div class="card-sub">Presence beacons from the gateway and clients.</div>
+          <div class="card-title">已连接实例</div>
+          <div class="card-sub">来自网关和客户端的在线信标。</div>
         </div>
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
-          ${props.loading ? "Loading…" : "Refresh"}
+          ${props.loading ? "加载中…" : "刷新"}
         </button>
       </div>
       ${props.lastError
@@ -35,7 +35,7 @@ export function renderInstances(props: InstancesProps) {
         : nothing}
       <div class="list" style="margin-top: 16px;">
         ${props.entries.length === 0
-          ? html`<div class="muted">No instances reported yet.</div>`
+          ? html`<div class="muted">暂无已报告的实例。</div>`
           : props.entries.map((entry) => renderEntry(entry))}
       </div>
     </section>
@@ -77,8 +77,8 @@ function renderEntry(entry: PresenceEntry) {
       </div>
       <div class="list-meta">
         <div>${formatPresenceAge(entry)}</div>
-        <div class="muted">Last input ${lastInput}</div>
-        <div class="muted">Reason ${entry.reason ?? ""}</div>
+        <div class="muted">最近输入 ${lastInput}</div>
+        <div class="muted">原因 ${entry.reason ?? ""}</div>
       </div>
     </div>
   `;

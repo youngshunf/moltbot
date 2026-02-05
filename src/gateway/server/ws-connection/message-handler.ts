@@ -2,6 +2,7 @@ import type { IncomingMessage } from "node:http";
 import os from "node:os";
 
 import type { WebSocket } from "ws";
+
 import {
   deriveDeviceIdFromPublicKey,
   normalizeDevicePublicKeyBase64Url,
@@ -25,6 +26,13 @@ import { isGatewayCliClient, isWebchatClient } from "../../../utils/message-chan
 import type { ResolvedGatewayAuth } from "../../auth.js";
 import { authorizeGatewayConnect, isLocalDirectRequest } from "../../auth.js";
 import { loadConfig } from "../../../config/config.js";
+import {
+  isMultiTenantEnabled,
+  resolveMultiTenantConfig,
+  type OpenClawConfigWithMultiTenant,
+} from "../../../config/types.multi-tenant.js";
+import type { GatewayWsClientMultiTenant } from "../../multi-tenant/types.js";
+import { setupUserWorkspace } from "../../multi-tenant/workspace-setup.js";
 import { buildDeviceAuthPayload } from "../../device-auth.js";
 import { isLoopbackAddress, isTrustedProxyAddress, resolveGatewayClientIp } from "../../net.js";
 import { resolveNodeCommandAllowlist } from "../../node-command-policy.js";
@@ -573,6 +581,96 @@ export function attachGatewayWsMessageHandler(params: {
         let authOk = authResult.ok;
         let authMethod =
           authResult.method ?? (resolvedAuth.mode === "password" ? "password" : "token");
+
+        // Multi-tenant mode: verify gatewayToken via cloud backend
+        const multiTenantConfig = resolveMultiTenantConfig(
+          (configSnapshot as OpenClawConfigWithMultiTenant).multiTenant,
+        );
+        let multiTenantUserId: string | undefined;
+        let multiTenantAgentDir: string | undefined;
+        let multiTenantWorkspaceDir: string | undefined;
+        logGateway.info(
+          `multi-tenant check: authOk=${authOk} enabled=${multiTenantConfig?.enabled} hasGatewayToken=${!!connectParams.auth?.gatewayToken} cloudBackendUrl=${multiTenantConfig?.cloudBackendUrl ?? "none"} conn=${connId}`,
+        );
+        // Multi-tenant mode: if gatewayToken is present, ALWAYS verify it and setup workspace
+        // (regardless of whether other auth methods succeeded)
+        if (multiTenantConfig?.enabled && connectParams.auth?.gatewayToken) {
+          const cloudBackendUrl = multiTenantConfig.cloudBackendUrl;
+          if (cloudBackendUrl) {
+            try {
+              const verifyUrl = new URL("/api/v1/openclaw/gateway/verify-token", cloudBackendUrl);
+              verifyUrl.searchParams.set("token", connectParams.auth.gatewayToken);
+              logGateway.info(
+                `multi-tenant verify request: ${verifyUrl.toString()} conn=${connId}`,
+              );
+              const verifyResponse = await fetch(verifyUrl.toString(), {
+                method: "POST",
+                headers: { "Content-Type": "application/json", Accept: "application/json" },
+                signal: AbortSignal.timeout(5000),
+              });
+              logGateway.info(
+                `multi-tenant verify response: status=${verifyResponse.status} conn=${connId}`,
+              );
+              if (verifyResponse.ok) {
+                const verifyData = (await verifyResponse.json()) as {
+                  data?: {
+                    user_id?: string;
+                    llm_api_key?: string;
+                    llm_api_base_url?: string;
+                  };
+                };
+                logGateway.info(
+                  `multi-tenant verify data: ${JSON.stringify(verifyData)} conn=${connId}`,
+                );
+                if (verifyData.data?.user_id) {
+                  authOk = true;
+                  authMethod = "gateway-token" as typeof authMethod;
+                  multiTenantUserId = verifyData.data.user_id;
+                  logGateway.info(
+                    `multi-tenant auth ok user=${verifyData.data.user_id} llmApiKey=${verifyData.data.llm_api_key ? "present" : "missing"} llmApiBaseUrl=${verifyData.data.llm_api_base_url ?? "missing"} conn=${connId}`,
+                  );
+
+                  // Setup user workspace with LLM credentials
+                  if (multiTenantConfig?.workspaceRoot) {
+                    try {
+                      const workspaceResult = await setupUserWorkspace({
+                        userId: verifyData.data.user_id,
+                        llmApiKey: verifyData.data.llm_api_key,
+                        llmApiBaseUrl: verifyData.data.llm_api_base_url,
+                        workspaceRoot: multiTenantConfig.workspaceRoot,
+                      });
+                      if (workspaceResult) {
+                        multiTenantAgentDir = workspaceResult.agentDir;
+                        multiTenantWorkspaceDir = workspaceResult.workspaceDir;
+                        logGateway.info(
+                          `user workspace setup complete user=${verifyData.data.user_id} agentDir=${workspaceResult.agentDir} workspaceDir=${workspaceResult.workspaceDir} conn=${connId}`,
+                        );
+                      }
+                    } catch (setupErr) {
+                      logGateway.warn(
+                        `user workspace setup failed: ${formatError(setupErr)} conn=${connId}`,
+                      );
+                    }
+                  }
+                }
+              } else {
+                const errorText = await verifyResponse.text();
+                logGateway.warn(
+                  `multi-tenant verify failed: status=${verifyResponse.status} body=${errorText} conn=${connId}`,
+                );
+              }
+            } catch (err) {
+              logGateway.warn(
+                `multi-tenant token verification error: ${formatError(err)} conn=${connId}`,
+              );
+            }
+          } else {
+            logGateway.warn(
+              `multi-tenant enabled but no cloudBackendUrl configured conn=${connId}`,
+            );
+          }
+        }
+
         if (!authOk && connectParams.auth?.token && device) {
           const tokenCheck = await verifyDeviceToken({
             deviceId: device.id,
@@ -785,6 +883,8 @@ export function attachGatewayWsMessageHandler(params: {
           snapshot.health = cachedHealth;
           snapshot.stateVersion.health = getHealthVersion();
         }
+        // Check if multi-tenant mode is enabled
+        const multiTenantMode = isMultiTenantEnabled(configSnapshot);
         const helloOk = {
           type: "hello-ok",
           protocol: PROTOCOL_VERSION,
@@ -810,6 +910,13 @@ export function attachGatewayWsMessageHandler(params: {
             maxBufferedBytes: MAX_BUFFERED_BYTES,
             tickIntervalMs: TICK_INTERVAL_MS,
           },
+          // Multi-tenant SaaS mode info
+          multiTenant: multiTenantMode
+            ? {
+                enabled: true,
+                loginRequired: true,
+              }
+            : undefined,
         };
 
         clearHandshakeTimer();
@@ -818,6 +925,9 @@ export function attachGatewayWsMessageHandler(params: {
           connect: connectParams,
           connId,
           presenceKey,
+          multiTenantUserId,
+          multiTenantAgentDir,
+          multiTenantWorkspaceDir,
         };
         setClient(nextClient);
         setHandshakeState("connected");

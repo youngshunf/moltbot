@@ -28,8 +28,8 @@ export default defineConfig(({ command }) => {
     },
     server: {
       host: true,
-      port: 5173,
-      strictPort: true,
+      port: 5180,
+      strictPort: false,
     },
   };
 });

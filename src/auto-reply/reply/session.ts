@@ -92,8 +92,10 @@ export async function initSessionState(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
   commandAuthorized: boolean;
+  /** Override store path for multi-tenant user workspaces */
+  storePathOverride?: string;
 }): Promise<SessionInitResult> {
-  const { ctx, cfg, commandAuthorized } = params;
+  const { ctx, cfg, commandAuthorized, storePathOverride } = params;
   // Native slash commands (Telegram/Discord/Slack) are delivered on a separate
   // "slash session" key, but should mutate the target chat session.
   const targetSessionKey =
@@ -113,7 +115,8 @@ export async function initSessionState(params: {
     ? sessionCfg.resetTriggers
     : DEFAULT_RESET_TRIGGERS;
   const sessionScope = sessionCfg?.scope ?? "per-sender";
-  const storePath = resolveStorePath(sessionCfg?.store, { agentId });
+  // Use override for multi-tenant user workspaces, otherwise resolve from config
+  const storePath = storePathOverride ?? resolveStorePath(sessionCfg?.store, { agentId });
 
   const sessionStore: Record<string, SessionEntry> = loadSessionStore(storePath);
   let sessionKey: string | undefined;
@@ -316,11 +319,16 @@ export async function initSessionState(params: {
       sessionEntry.sessionFile = forked.sessionFile;
     }
   }
-  if (!sessionEntry.sessionFile) {
+  // For multi-tenant, derive sessions directory from storePathOverride
+  const sessionsDirOverride = storePathOverride ? path.dirname(storePathOverride) : undefined;
+  // Multi-tenant: always recalculate sessionFile to ensure workspace directory is used
+  // (existing sessions may have paths pointing to global directory)
+  if (!sessionEntry.sessionFile || sessionsDirOverride) {
     sessionEntry.sessionFile = resolveSessionTranscriptPath(
       sessionEntry.sessionId,
       agentId,
       ctx.MessageThreadId,
+      sessionsDirOverride,
     );
   }
   if (isNewSession) {

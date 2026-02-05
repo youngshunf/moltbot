@@ -181,7 +181,7 @@ function broadcastChatError(params: {
 }
 
 export const chatHandlers: GatewayRequestHandlers = {
-  "chat.history": async ({ params, respond, context }) => {
+  "chat.history": async ({ params, respond, context, client }) => {
     if (!validateChatHistoryParams(params)) {
       respond(
         false,
@@ -197,7 +197,15 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey: string;
       limit?: number;
     };
-    const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
+    let storePathOverride: string | undefined;
+    // Multi-tenant: store sessions in user's workspace directory, not agent directory
+    if (client?.multiTenantWorkspaceDir) {
+      storePathOverride = path.join(client.multiTenantWorkspaceDir, "sessions", "sessions.json");
+    }
+
+    const { cfg, storePath, entry } = loadSessionEntry(sessionKey, {
+      storePath: storePathOverride,
+    });
     const sessionId = entry?.sessionId;
     const rawMessages =
       sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
@@ -362,7 +370,12 @@ export const chatHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    const { cfg, entry } = loadSessionEntry(p.sessionKey);
+    let storePathOverride: string | undefined;
+    // Multi-tenant: store sessions in user's workspace directory, not agent directory
+    if (client?.multiTenantWorkspaceDir) {
+      storePathOverride = path.join(client.multiTenantWorkspaceDir, "sessions", "sessions.json");
+    }
+    const { cfg, entry } = loadSessionEntry(p.sessionKey, { storePath: storePathOverride });
     const timeoutMs = resolveAgentTimeoutMs({
       cfg,
       overrideMs: p.timeoutMs,
@@ -493,6 +506,9 @@ export const chatHandlers: GatewayRequestHandlers = {
           abortSignal: abortController.signal,
           images: parsedImages.length > 0 ? parsedImages : undefined,
           disableBlockStreaming: true,
+          // Use user-specific agent directory for multi-tenant users
+          agentDir: client?.multiTenantAgentDir,
+          workspaceDir: client?.multiTenantWorkspaceDir,
           onAgentRunStart: () => {
             agentRunStarted = true;
           },
@@ -515,6 +531,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             if (combinedReply) {
               const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(
                 p.sessionKey,
+                { storePath: storePathOverride },
               );
               const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
               const appended = appendAssistantTranscriptMessage({

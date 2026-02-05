@@ -8,6 +8,7 @@ import {
   readConfigFileSnapshot,
   resolveGatewayPort,
 } from "../../config/config.js";
+import { isMultiTenantEnabled } from "../../config/types.multi-tenant.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
 import { startGatewayServer } from "../../gateway/server.js";
 import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
@@ -218,7 +219,15 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       '"gateway.remote.token" is for remote CLI calls; it does not enable local gateway auth.',
     );
   }
-  if (resolvedAuthMode === "token" && !hasToken && !resolvedAuth.allowTailscale) {
+  // Multi-tenant mode: skip token pre-configuration check
+  // Users authenticate via Cloud Backend and get Gateway Token dynamically
+  const multiTenantMode = isMultiTenantEnabled(cfg);
+  if (
+    resolvedAuthMode === "token" &&
+    !hasToken &&
+    !resolvedAuth.allowTailscale &&
+    !multiTenantMode
+  ) {
     defaultRuntime.error(
       [
         "Gateway auth is set to token, but no token is configured.",
@@ -244,7 +253,9 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.exit(1);
     return;
   }
-  if (bind !== "loopback" && !hasSharedSecret) {
+  // In multi-tenant SaaS mode, allow binding to non-loopback without pre-configured auth
+  // (auth is handled per-connection after user login)
+  if (bind !== "loopback" && !hasSharedSecret && !multiTenantMode) {
     defaultRuntime.error(
       [
         `Refusing to bind gateway to ${bind} without auth.`,

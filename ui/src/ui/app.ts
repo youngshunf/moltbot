@@ -4,6 +4,9 @@ import { customElement, state } from "lit/decorators.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway";
 import { resolveInjectedAssistantIdentity } from "./assistant-identity";
 import { loadSettings, type UiSettings } from "./storage";
+import { isLoggedIn, loadAuthData, clearAuthData, saveAuthData } from "./auth/store";
+import type { UserInfo, LoginState, AuthStorageData } from "./auth/types";
+import { sendVerificationCode, login } from "./auth/api";
 import { renderApp } from "./app-render";
 import type { Tab } from "./navigation";
 import type { ResolvedTheme, ThemeMode } from "./theme";
@@ -103,6 +106,21 @@ export class OpenClawApp extends LitElement {
   @state() tab: Tab = "chat";
   @state() onboarding = resolveOnboardingMode();
   @state() connected = false;
+  // SaaS 登录状态 - 由 Gateway 决定是否为多租户模式
+  @state() saasMode = false;
+  @state() saasLoginRequired = false;
+  @state() loggedIn = isLoggedIn();
+  @state() authData: AuthStorageData | null = loadAuthData();
+@state() userInfo: UserInfo | null = this.authData?.user ?? null;
+  // 登录表单状态
+  @state() loginState: LoginState = {
+    step: "phone",
+    phone: "",
+    code: "",
+    error: null,
+    countdown: 0,
+  };
+  private loginCountdownTimer: number | null = null;
   @state() theme: ThemeMode = this.settings.theme ?? "system";
   @state() themeResolved: ResolvedTheme = "dark";
   @state() hello: GatewayHelloOk | null = null;
@@ -430,6 +448,122 @@ export class OpenClawApp extends LitElement {
 
   handleNostrProfileToggleAdvanced() {
     handleNostrProfileToggleAdvancedInternal(this);
+  }
+
+  // SaaS 登录相关方法
+  handleMultiTenantDetected(info: { enabled: boolean; loginRequired: boolean }) {
+    console.log("[app] handleMultiTenantDetected called", info, { loggedIn: this.loggedIn });
+    this.saasMode = info.enabled;
+    this.saasLoginRequired = info.loginRequired;
+    // 如果需要登录且未登录，保持当前状态等待用户登录
+    if (info.loginRequired && !this.loggedIn) {
+      console.log("[app] user needs to login, showing login page");
+    }
+  }
+
+  // 登录表单处理方法
+  handleLoginPhoneChange(phone: string) {
+    this.loginState = { ...this.loginState, phone, error: null };
+  }
+
+  handleLoginCodeChange(code: string) {
+    this.loginState = { ...this.loginState, code, error: null };
+  }
+
+  handleLoginBack() {
+    this.loginState = { ...this.loginState, step: "phone", code: "", error: null };
+  }
+
+  async handleLoginSendCode() {
+    const { phone } = this.loginState;
+    if (!/^1[3-9]\d{9}$/.test(phone)) {
+      this.loginState = { ...this.loginState, error: "请输入正确的手机号" };
+      return;
+    }
+    this.loginState = { ...this.loginState, step: "loading", error: null };
+    try {
+      await sendVerificationCode({ phone });
+      this.loginState = { ...this.loginState, step: "code", countdown: 60 };
+      this.startLoginCountdown();
+    } catch (err) {
+      this.loginState = {
+        ...this.loginState,
+        step: "phone",
+        error: err instanceof Error ? err.message : "发送验证码失败",
+      };
+    }
+  }
+
+  async handleLoginSubmit() {
+    const { phone, code } = this.loginState;
+    if (!/^\d{4,6}$/.test(code)) {
+      this.loginState = { ...this.loginState, error: "请输入正确的验证码" };
+      return;
+    }
+    this.loginState = { ...this.loginState, step: "loading", error: null };
+    try {
+      const result = await login(phone, code);
+      const authData: AuthStorageData = {
+        accessToken: result.accessToken,
+        accessTokenExpireTime: result.accessTokenExpireTime,
+        refreshToken: result.refreshToken,
+        refreshTokenExpireTime: result.refreshTokenExpireTime,
+        llmToken: result.llmToken,
+        gatewayToken: result.gatewayToken,
+        user: result.user,
+      };
+      saveAuthData(authData);
+      this.handleLoginSuccess(authData);
+      // 重置登录表单
+      this.loginState = { step: "phone", phone: "", code: "", error: null, countdown: 0 };
+    } catch (err) {
+      this.loginState = {
+        ...this.loginState,
+        step: "code",
+        error: err instanceof Error ? err.message : "登录失败",
+      };
+    }
+  }
+
+  private startLoginCountdown() {
+    if (this.loginCountdownTimer) {
+      window.clearInterval(this.loginCountdownTimer);
+    }
+    this.loginCountdownTimer = window.setInterval(() => {
+      const countdown = this.loginState.countdown - 1;
+      if (countdown <= 0) {
+        if (this.loginCountdownTimer) {
+          window.clearInterval(this.loginCountdownTimer);
+          this.loginCountdownTimer = null;
+        }
+        this.loginState = { ...this.loginState, countdown: 0 };
+      } else {
+        this.loginState = { ...this.loginState, countdown };
+      }
+    }, 1000);
+  }
+
+  handleLoginSuccess(data: AuthStorageData) {
+    this.authData = data;
+    this.userInfo = data.user;
+    this.loggedIn = true;
+    // 登录成功后自动连接 Gateway
+    this.connect();
+  }
+
+  handleLogout() {
+    clearAuthData();
+    this.authData = null;
+    this.userInfo = null;
+    this.loggedIn = false;
+    // 重置登录表单
+    this.loginState = { step: "phone", phone: "", code: "", error: null, countdown: 0 };
+    // 断开 Gateway 连接
+    if (this.client) {
+      this.client.stop();
+      this.client = null;
+    }
+    this.connected = false;
   }
 
   async handleExecApprovalDecision(decision: "allow-once" | "allow-always" | "deny") {

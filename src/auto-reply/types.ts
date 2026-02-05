@@ -39,6 +39,10 @@ export type GetReplyOptions = {
   skillFilter?: string[];
   /** Mutable ref to track if a reply was sent (for Slack "first" threading mode). */
   hasRepliedRef?: { value: boolean };
+  /** Override agent directory path (for multi-tenant user workspaces). */
+  agentDir?: string;
+  /** Override workspace directory path (for multi-tenant user workspaces). */
+  workspaceDir?: string;
 };
 
 export type ReplyPayload = {

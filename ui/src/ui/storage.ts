@@ -1,6 +1,7 @@
 const KEY = "openclaw.control.settings.v1";
 
 import type { ThemeMode } from "./theme";
+import { getEffectiveGatewayUrl, getRuntimeConfig } from "./runtime-config";
 
 export type UiSettings = {
   gatewayUrl: string;
@@ -16,10 +17,8 @@ export type UiSettings = {
 };
 
 export function loadSettings(): UiSettings {
-  const defaultUrl = (() => {
-    const proto = location.protocol === "https:" ? "wss" : "ws";
-    return `${proto}://${location.host}`;
-  })();
+  // Use runtime config for Gateway URL (supports deployment-time configuration)
+  const defaultUrl = getEffectiveGatewayUrl();
 
   const defaults: UiSettings = {
     gatewayUrl: defaultUrl,
@@ -38,9 +37,12 @@ export function loadSettings(): UiSettings {
     const raw = localStorage.getItem(KEY);
     if (!raw) return defaults;
     const parsed = JSON.parse(raw) as Partial<UiSettings>;
+    // If runtime config has explicit gatewayUrl, use it (deployment-time override)
+    const runtimeGatewayUrl = getRuntimeConfig()?.gatewayUrl;
     return {
-      gatewayUrl:
-        typeof parsed.gatewayUrl === "string" && parsed.gatewayUrl.trim()
+      gatewayUrl: runtimeGatewayUrl
+        ? runtimeGatewayUrl
+        : typeof parsed.gatewayUrl === "string" && parsed.gatewayUrl.trim()
           ? parsed.gatewayUrl.trim()
           : defaults.gatewayUrl,
       token: typeof parsed.token === "string" ? parsed.token : defaults.token,

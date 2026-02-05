@@ -126,29 +126,95 @@ export class MultiTenantGatewayManager {
 
   /**
    * Authenticate a gateway token and return the user ID.
+   * Checks local cache first, then queries cloud backend if not found.
    *
    * @param token - Gateway authentication token
    * @returns User ID if authenticated, null otherwise
    */
-  authenticateToken(token: string): string | null {
-    const userId = this.tokenToUserId.get(token);
-    if (!userId) return null;
+  async authenticateToken(token: string): Promise<string | null> {
+    // Check local cache first
+    const cachedUserId = this.tokenToUserId.get(token);
+    if (cachedUserId) {
+      const instance = this.userInstances.get(cachedUserId);
+      if (instance) {
+        if (instance.status === "suspended") {
+          this.emit({ type: "user-suspended", userId: cachedUserId });
+          return null;
+        }
+        if (instance.status === "expired") {
+          this.emit({ type: "user-expired", userId: cachedUserId });
+          return null;
+        }
+        return cachedUserId;
+      }
+    }
 
-    // Check if user is still active
-    const instance = this.userInstances.get(userId);
-    if (!instance) return null;
-
-    // Check user status
-    if (instance.status === "suspended") {
-      this.emit({ type: "user-suspended", userId });
+    // Token not in local cache, query cloud backend
+    const cloudBackendUrl = this.options.cloudBackendUrl;
+    if (!cloudBackendUrl) {
+      this.options.logger.warn(
+        "[MultiTenantManager] No cloud backend URL configured for token verification",
+      );
       return null;
     }
-    if (instance.status === "expired") {
-      this.emit({ type: "user-expired", userId });
+
+    try {
+      const url = new URL("/api/v1/openclaw/gateway/verify-token", cloudBackendUrl);
+      url.searchParams.set("token", token);
+
+      const response = await fetch(url.toString(), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        signal: AbortSignal.timeout(5000), // 5 second timeout
+      });
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          // Token is invalid
+          return null;
+        }
+        this.options.logger.error(
+          `[MultiTenantManager] Token verification failed: HTTP ${response.status}`,
+        );
+        return null;
+      }
+
+      const data = (await response.json()) as {
+        data?: { user_id: string; status: string; openclaw_config: Record<string, unknown> };
+      };
+      const result = data.data;
+
+      if (!result?.user_id) {
+        return null;
+      }
+
+      const userId = sanitizeUserId(result.user_id);
+
+      // Cache the token for future use
+      this.tokenToUserId.set(token, userId);
+
+      // Initialize user instance if not exists
+      if (!this.userInstances.has(userId)) {
+        await this.initializeUserInstance(userId, result.openclaw_config as OpenClawConfig, {
+          userId: result.user_id,
+          gatewayToken: token,
+          openclawConfig: result.openclaw_config as OpenClawConfig,
+          status: result.status as "active" | "suspended" | "expired",
+          updatedAt: new Date().toISOString(),
+        });
+      }
+
+      this.options.logger.log(
+        `[MultiTenantManager] Token verified via cloud backend for user ${userId}`,
+      );
+      return userId;
+    } catch (err) {
+      this.options.logger.error("[MultiTenantManager] Token verification error:", err);
       return null;
     }
-
-    return userId;
   }
 
   /**

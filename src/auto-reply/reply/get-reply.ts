@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -61,13 +62,15 @@ export async function getReplyFromConfig(
     }
   }
 
-  const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
+  const workspaceDirRaw =
+    opts?.workspaceDir ?? resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
     ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
   });
   const workspaceDir = workspace.dir;
-  const agentDir = resolveAgentDir(cfg, agentId);
+  // Use override agentDir for multi-tenant user workspaces, otherwise resolve from config
+  const agentDir = opts?.agentDir ?? resolveAgentDir(cfg, agentId);
   const timeoutMs = resolveAgentTimeoutMs({ cfg });
   const configuredTypingSeconds =
     agentCfg?.typingIntervalSeconds ?? sessionCfg?.typingIntervalSeconds;
@@ -102,10 +105,15 @@ export async function getReplyFromConfig(
     cfg,
     commandAuthorized,
   });
+  // For multi-tenant users, override session store path to use user's workspace
+  const storePathOverride = opts?.workspaceDir
+    ? path.join(opts.workspaceDir, "sessions", "sessions.json")
+    : undefined;
   const sessionState = await initSessionState({
     ctx: finalized,
     cfg,
     commandAuthorized,
+    storePathOverride,
   });
   let {
     sessionCtx,

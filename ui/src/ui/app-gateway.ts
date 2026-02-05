@@ -27,6 +27,8 @@ import type { OpenClawApp } from "./app";
 import type { ExecApprovalRequest } from "./controllers/exec-approval";
 import { loadAssistantIdentity } from "./controllers/assistant-identity";
 import { loadSessions } from "./controllers/sessions";
+import { getGatewayToken } from "./auth/store";
+import type { UserInfo, AuthStorageData } from "./auth/types";
 
 type GatewayHost = {
   settings: UiSettings;
@@ -54,6 +56,13 @@ type GatewayHost = {
   refreshSessionsAfterChat: boolean;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
+  // SaaS 模式相关
+  saasMode?: boolean;
+  saasLoginRequired?: boolean;
+  loggedIn?: boolean;
+  authData?: AuthStorageData | null;
+  userInfo?: UserInfo | null;
+  handleMultiTenantDetected?: (info: { enabled: boolean; loginRequired: boolean }) => void;
 };
 
 type SessionDefaultsSnapshot = {
@@ -117,13 +126,29 @@ export function connectGateway(host: GatewayHost) {
   host.execApprovalQueue = [];
   host.execApprovalError = null;
 
+  // 优先使用 SaaS 登录的 Gateway Token，否则使用配置的 token
+  let authToken: string | undefined;
+  const saasGatewayToken = getGatewayToken();
+  if (saasGatewayToken) {
+    // 已登录，使用 SaaS Gateway Token
+    authToken = saasGatewayToken;
+    console.log("[gateway] using SaaS gateway token");
+  } else {
+    // 未登录，使用配置的 token
+    authToken = host.settings.token.trim() ? host.settings.token : undefined;
+  }
+
   host.client?.stop();
   host.client = new GatewayBrowserClient({
     url: host.settings.gatewayUrl,
-    token: host.settings.token.trim() ? host.settings.token : undefined,
-    password: host.password.trim() ? host.password : undefined,
+    token: authToken,
+    password: host.saasMode ? undefined : (host.password.trim() ? host.password : undefined),
     clientName: "openclaw-control-ui",
     mode: "webchat",
+    onMultiTenantDetected: (info) => {
+      // Gateway 报告了多租户模式
+      host.handleMultiTenantDetected?.(info);
+    },
     onHello: (hello) => {
       host.connected = true;
       host.lastError = null;

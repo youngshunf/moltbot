@@ -23,6 +23,7 @@ import type { NodeHostConfig } from "./types.node-host.js";
 import type { PluginsConfig } from "./types.plugins.js";
 import type { SkillsConfig } from "./types.skills.js";
 import type { ToolsConfig } from "./types.tools.js";
+import type { MultiTenantConfig } from "./types.multi-tenant.js";
 
 export type OpenClawConfig = {
   meta?: {
@@ -95,6 +96,8 @@ export type OpenClawConfig = {
   canvasHost?: CanvasHostConfig;
   talk?: TalkConfig;
   gateway?: GatewayConfig;
+  /** Multi-tenant configuration for SaaS deployment */
+  multiTenant?: Partial<MultiTenantConfig>;
 };
 
 export type ConfigValidationIssue = {

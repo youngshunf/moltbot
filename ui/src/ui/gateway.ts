@@ -37,11 +37,21 @@ export type GatewayHelloOk = {
     issuedAtMs?: number;
   };
   policy?: { tickIntervalMs?: number };
+  // Multi-tenant SaaS mode
+  multiTenant?: {
+    enabled: boolean;
+    loginRequired: boolean;
+  };
 };
 
 type Pending = {
   resolve: (value: unknown) => void;
   reject: (err: unknown) => void;
+};
+
+export type MultiTenantInfo = {
+  enabled: boolean;
+  loginRequired: boolean;
 };
 
 export type GatewayBrowserClientOptions = {
@@ -57,6 +67,8 @@ export type GatewayBrowserClientOptions = {
   onEvent?: (evt: GatewayEventFrame) => void;
   onClose?: (info: { code: number; reason: string }) => void;
   onGap?: (info: { expected: number; received: number }) => void;
+  // Called when Gateway reports multi-tenant mode requiring login
+  onMultiTenantDetected?: (info: MultiTenantInfo) => void;
 };
 
 // 4008 = application-defined code (browser rejects 1008 "Policy Violation")
@@ -152,6 +164,8 @@ export class GatewayBrowserClient {
         ? {
             token: authToken,
             password: this.opts.password,
+            // For multi-tenant mode, also send as gatewayToken
+            gatewayToken: authToken,
           }
         : undefined;
 
@@ -239,8 +253,29 @@ export class GatewayBrowserClient {
     if (frame.type === "event") {
       const evt = parsed as GatewayEventFrame;
       if (evt.event === "connect.challenge") {
-        const payload = evt.payload as { nonce?: unknown } | undefined;
+        const payload = evt.payload as {
+          nonce?: unknown;
+          multiTenant?: { enabled?: boolean; loginRequired?: boolean };
+        } | undefined;
         const nonce = payload && typeof payload.nonce === "string" ? payload.nonce : null;
+        
+        // Check for multi-tenant mode
+        const multiTenant = payload?.multiTenant;
+        console.log("[gateway] connect.challenge received", { nonce, multiTenant, hasToken: !!this.opts.token });
+        if (multiTenant?.enabled && multiTenant?.loginRequired) {
+          console.log("[gateway] multi-tenant mode detected, calling onMultiTenantDetected");
+          this.opts.onMultiTenantDetected?.({
+            enabled: true,
+            loginRequired: true,
+          });
+          // If no token provided and login is required, don't auto-connect
+          // Wait for user to login and provide token
+          if (!this.opts.token) {
+            console.log("[gateway] no token, waiting for login");
+            return;
+          }
+        }
+        
         if (nonce) {
           this.connectNonce = nonce;
           void this.sendConnect();

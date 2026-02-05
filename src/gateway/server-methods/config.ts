@@ -1,6 +1,8 @@
+import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   CONFIG_PATH,
+  createConfigIO,
   loadConfig,
   parseConfigJson5,
   readConfigFileSnapshot,
@@ -8,6 +10,7 @@ import {
   validateConfigObjectWithPlugins,
   writeConfigFile,
 } from "../../config/config.js";
+import type { GatewayClient } from "./types.js";
 import { applyLegacyMigrations } from "../../config/legacy.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { buildConfigSchema } from "../../config/schema.js";
@@ -82,8 +85,30 @@ function requireConfigBaseHash(
   return true;
 }
 
+/**
+ * Resolve config path for multi-tenant user or global config.
+ */
+function resolveUserConfigPath(client: GatewayClient | null): string | null {
+  // Multi-tenant: use user's agent directory for config
+  if (client?.multiTenantAgentDir) {
+    return path.join(client.multiTenantAgentDir, "openclaw.json");
+  }
+  return null;
+}
+
+/**
+ * Create config IO for multi-tenant user or use global.
+ */
+function createUserConfigIO(client: GatewayClient | null) {
+  const userConfigPath = resolveUserConfigPath(client);
+  if (userConfigPath) {
+    return createConfigIO({ configPath: userConfigPath });
+  }
+  return createConfigIO();
+}
+
 export const configHandlers: GatewayRequestHandlers = {
-  "config.get": async ({ params, respond }) => {
+  "config.get": async ({ params, client, respond }) => {
     if (!validateConfigGetParams(params)) {
       respond(
         false,
@@ -95,7 +120,17 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const snapshot = await readConfigFileSnapshot();
+    // Debug: log client info for multi-tenant config resolution
+    console.log(
+      `[config.get] client=${JSON.stringify({
+        hasConnect: !!client?.connect,
+        multiTenantAgentDir: client?.multiTenantAgentDir ?? "undefined",
+        multiTenantWorkspaceDir: client?.multiTenantWorkspaceDir ?? "undefined",
+      })}`,
+    );
+    const configIO = createUserConfigIO(client);
+    console.log(`[config.get] resolved configPath=${configIO.configPath}`);
+    const snapshot = await configIO.readConfigFileSnapshot();
     respond(true, snapshot, undefined);
   },
   "config.schema": ({ params, respond }) => {
@@ -140,7 +175,7 @@ export const configHandlers: GatewayRequestHandlers = {
     });
     respond(true, schema, undefined);
   },
-  "config.set": async ({ params, respond }) => {
+  "config.set": async ({ params, client, respond }) => {
     if (!validateConfigSetParams(params)) {
       respond(
         false,
@@ -152,7 +187,8 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const snapshot = await readConfigFileSnapshot();
+    const configIO = createUserConfigIO(client);
+    const snapshot = await configIO.readConfigFileSnapshot();
     if (!requireConfigBaseHash(params, snapshot, respond)) {
       return;
     }
@@ -181,18 +217,18 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    await writeConfigFile(validated.config);
+    await configIO.writeConfigFile(validated.config);
     respond(
       true,
       {
         ok: true,
-        path: CONFIG_PATH,
+        path: configIO.configPath,
         config: validated.config,
       },
       undefined,
     );
   },
-  "config.patch": async ({ params, respond }) => {
+  "config.patch": async ({ params, client, respond }) => {
     if (!validateConfigPatchParams(params)) {
       respond(
         false,
@@ -204,7 +240,8 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const snapshot = await readConfigFileSnapshot();
+    const configIO = createUserConfigIO(client);
+    const snapshot = await configIO.readConfigFileSnapshot();
     if (!requireConfigBaseHash(params, snapshot, respond)) {
       return;
     }
@@ -259,7 +296,7 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    await writeConfigFile(validated.config);
+    await configIO.writeConfigFile(validated.config);
 
     const sessionKey =
       typeof (params as { sessionKey?: unknown }).sessionKey === "string"
@@ -275,44 +312,64 @@ export const configHandlers: GatewayRequestHandlers = {
         ? Math.max(0, Math.floor(restartDelayMsRaw))
         : undefined;
 
-    const payload: RestartSentinelPayload = {
-      kind: "config-apply",
-      status: "ok",
-      ts: Date.now(),
-      sessionKey,
-      message: note ?? null,
-      doctorHint: formatDoctorNonInteractiveHint(),
-      stats: {
-        mode: "config.patch",
-        root: CONFIG_PATH,
-      },
-    };
+    // Multi-tenant: skip restart sentinel and gateway restart (user config doesn't affect gateway)
+    const isMultiTenantUser = Boolean(client?.multiTenantAgentDir);
     let sentinelPath: string | null = null;
-    try {
-      sentinelPath = await writeRestartSentinel(payload);
-    } catch {
-      sentinelPath = null;
+    let restart: ReturnType<typeof scheduleGatewaySigusr1Restart> | null = null;
+
+    if (!isMultiTenantUser) {
+      const payload: RestartSentinelPayload = {
+        kind: "config-apply",
+        status: "ok",
+        ts: Date.now(),
+        sessionKey,
+        message: note ?? null,
+        doctorHint: formatDoctorNonInteractiveHint(),
+        stats: {
+          mode: "config.patch",
+          root: configIO.configPath,
+        },
+      };
+      try {
+        sentinelPath = await writeRestartSentinel(payload);
+      } catch {
+        sentinelPath = null;
+      }
+      restart = scheduleGatewaySigusr1Restart({
+        delayMs: restartDelayMs,
+        reason: "config.patch",
+      });
     }
-    const restart = scheduleGatewaySigusr1Restart({
-      delayMs: restartDelayMs,
-      reason: "config.patch",
-    });
+
     respond(
       true,
       {
         ok: true,
-        path: CONFIG_PATH,
+        path: configIO.configPath,
         config: validated.config,
         restart,
-        sentinel: {
-          path: sentinelPath,
-          payload,
-        },
+        sentinel: sentinelPath
+          ? {
+              path: sentinelPath,
+              payload: {
+                kind: "config-apply",
+                status: "ok",
+                ts: Date.now(),
+                sessionKey,
+                message: note ?? null,
+                doctorHint: formatDoctorNonInteractiveHint(),
+                stats: {
+                  mode: "config.patch",
+                  root: configIO.configPath,
+                },
+              },
+            }
+          : null,
       },
       undefined,
     );
   },
-  "config.apply": async ({ params, respond }) => {
+  "config.apply": async ({ params, client, respond }) => {
     if (!validateConfigApplyParams(params)) {
       respond(
         false,
@@ -324,7 +381,8 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const snapshot = await readConfigFileSnapshot();
+    const configIO = createUserConfigIO(client);
+    const snapshot = await configIO.readConfigFileSnapshot();
     if (!requireConfigBaseHash(params, snapshot, respond)) {
       return;
     }
@@ -356,7 +414,7 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    await writeConfigFile(validated.config);
+    await configIO.writeConfigFile(validated.config);
 
     const sessionKey =
       typeof (params as { sessionKey?: unknown }).sessionKey === "string"
@@ -372,39 +430,59 @@ export const configHandlers: GatewayRequestHandlers = {
         ? Math.max(0, Math.floor(restartDelayMsRaw))
         : undefined;
 
-    const payload: RestartSentinelPayload = {
-      kind: "config-apply",
-      status: "ok",
-      ts: Date.now(),
-      sessionKey,
-      message: note ?? null,
-      doctorHint: formatDoctorNonInteractiveHint(),
-      stats: {
-        mode: "config.apply",
-        root: CONFIG_PATH,
-      },
-    };
+    // Multi-tenant: skip restart sentinel and gateway restart (user config doesn't affect gateway)
+    const isMultiTenantUser = Boolean(client?.multiTenantAgentDir);
     let sentinelPath: string | null = null;
-    try {
-      sentinelPath = await writeRestartSentinel(payload);
-    } catch {
-      sentinelPath = null;
+    let restart: ReturnType<typeof scheduleGatewaySigusr1Restart> | null = null;
+
+    if (!isMultiTenantUser) {
+      const payload: RestartSentinelPayload = {
+        kind: "config-apply",
+        status: "ok",
+        ts: Date.now(),
+        sessionKey,
+        message: note ?? null,
+        doctorHint: formatDoctorNonInteractiveHint(),
+        stats: {
+          mode: "config.apply",
+          root: configIO.configPath,
+        },
+      };
+      try {
+        sentinelPath = await writeRestartSentinel(payload);
+      } catch {
+        sentinelPath = null;
+      }
+      restart = scheduleGatewaySigusr1Restart({
+        delayMs: restartDelayMs,
+        reason: "config.apply",
+      });
     }
-    const restart = scheduleGatewaySigusr1Restart({
-      delayMs: restartDelayMs,
-      reason: "config.apply",
-    });
+
     respond(
       true,
       {
         ok: true,
-        path: CONFIG_PATH,
+        path: configIO.configPath,
         config: validated.config,
         restart,
-        sentinel: {
-          path: sentinelPath,
-          payload,
-        },
+        sentinel: sentinelPath
+          ? {
+              path: sentinelPath,
+              payload: {
+                kind: "config-apply",
+                status: "ok",
+                ts: Date.now(),
+                sessionKey,
+                message: note ?? null,
+                doctorHint: formatDoctorNonInteractiveHint(),
+                stats: {
+                  mode: "config.apply",
+                  root: configIO.configPath,
+                },
+              },
+            }
+          : null,
       },
       undefined,
     );

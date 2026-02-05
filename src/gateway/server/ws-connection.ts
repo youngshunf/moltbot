@@ -5,6 +5,8 @@ import { resolveCanvasHostUrl } from "../../infra/canvas-host-url.js";
 import { listSystemPresence, upsertPresence } from "../../infra/system-presence.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isWebchatClient } from "../../utils/message-channel.js";
+import { loadConfig } from "../../config/config.js";
+import { isMultiTenantEnabled } from "../../config/types.multi-tenant.js";
 
 import type { ResolvedGatewayAuth } from "../auth.js";
 import { isLoopbackAddress } from "../net.js";
@@ -118,10 +120,18 @@ export function attachGatewayWsConnectionHandler(params: {
     };
 
     const connectNonce = randomUUID();
+    // Check multi-tenant mode for challenge payload
+    const cfg = loadConfig();
+    const multiTenantMode = isMultiTenantEnabled(cfg);
     send({
       type: "event",
       event: "connect.challenge",
-      payload: { nonce: connectNonce, ts: Date.now() },
+      payload: {
+        nonce: connectNonce,
+        ts: Date.now(),
+        // Include multiTenant info so clients can show login UI before auth attempt
+        multiTenant: multiTenantMode ? { enabled: true, loginRequired: true } : undefined,
+      },
     });
 
     const close = (code = 1000, reason?: string) => {

@@ -144,22 +144,24 @@ export function getMultiTenantTemplatePath(): string {
 
 /**
  * Get the config file path for a specific user.
+ * Directory structure: {configRoot}/users/{userId}/config.json
  */
 export function getUserConfigPath(userId: string): string {
   const configRoot = getMultiTenantConfigRoot();
   // Sanitize userId to prevent directory traversal
   const safeUserId = sanitizeUserId(userId);
-  return path.join(configRoot, safeUserId, "config.json");
+  return path.join(configRoot, "users", safeUserId, "config.json");
 }
 
 /**
  * Get the workspace directory path for a specific user.
+ * Directory structure: {workspaceRoot}/users/{userId}/
  */
 export function getUserWorkspacePath(userId: string): string {
   const workspaceRoot = getMultiTenantWorkspaceRoot();
   // Sanitize userId to prevent directory traversal
   const safeUserId = sanitizeUserId(userId);
-  return path.join(workspaceRoot, safeUserId);
+  return path.join(workspaceRoot, "users", safeUserId);
 }
 
 /**
